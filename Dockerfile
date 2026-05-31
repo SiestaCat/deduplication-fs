@@ -1,3 +1,7 @@
+# Base image used by the host-binary build stage. Override with
+# `docker build --build-arg HOST_BASE=debian:bookworm ...` for older hosts.
+ARG HOST_BASE=debian:trixie
+
 # ---------- Stage 1: build the FUSE binary (used by the runtime image) ----------
 FROM gcc:13-bookworm AS build
 
@@ -18,10 +22,14 @@ RUN make
 
 # ---------- Stage 2: build BOTH the FUSE binary and the GUI binary ----------
 # Used by `docker build --target export --output ...` to extract host binaries.
-FROM gcc:13-bookworm AS build-host
+# Uses Debian Trixie by default to match modern hosts' libfuse3 soname
+# (libfuse3.so.4). For older hosts, build with
+# `docker build --build-arg HOST_BASE=debian:bookworm ...`.
+FROM ${HOST_BASE} AS build-host
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         libfuse3-dev \
         libsqlite3-dev \
         libssl-dev \

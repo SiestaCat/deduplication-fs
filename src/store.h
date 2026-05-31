@@ -4,7 +4,8 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-#define CHUNK_SIZE 64
+/* 1MB chunk size*/
+#define CHUNK_SIZE 1000000
 #define SHA512_HEX_LEN 128
 
 int store_init(const char *root);

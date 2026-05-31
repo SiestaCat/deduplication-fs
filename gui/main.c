@@ -35,6 +35,9 @@ typedef struct {
     gchar *mount_path;
     GPid   fuse_pid;
     gboolean mounted;
+
+    GIOChannel *fuse_stderr;
+    guint       fuse_stderr_watch;
 } AppState;
 
 /* ---------- utility ---------- */
@@ -163,21 +166,90 @@ static char *find_app_binary(void) {
     return NULL;
 }
 
+static void describe_exit(AppState *st, gint status) {
+    if (WIFEXITED(status)) {
+        int code = WEXITSTATUS(status);
+        log_append(st, "[gui] FUSE process exited with code %d", code);
+        if (code == 127) {
+            log_append(st, "[gui] hint: code 127 usually means a shared library is missing or `fusermount3` is not on PATH");
+            log_append(st, "[gui] hint: run `ldd dist/app` to see which library is missing");
+        }
+    } else if (WIFSIGNALED(status)) {
+        log_append(st, "[gui] FUSE process killed by signal %d", WTERMSIG(status));
+    } else {
+        log_append(st, "[gui] FUSE process exited (raw status=%d)", status);
+    }
+}
+
+static void detach_stderr_watch(AppState *st) {
+    if (st->fuse_stderr_watch) {
+        g_source_remove(st->fuse_stderr_watch);
+        st->fuse_stderr_watch = 0;
+    }
+    if (st->fuse_stderr) {
+        g_io_channel_shutdown(st->fuse_stderr, FALSE, NULL);
+        g_io_channel_unref(st->fuse_stderr);
+        st->fuse_stderr = NULL;
+    }
+}
+
 static void on_child_exit(GPid pid, gint status, gpointer user_data) {
     AppState *st = user_data;
     g_spawn_close_pid(pid);
     if (st->fuse_pid != pid) return;
     st->fuse_pid = 0;
+
+    /* drain any remaining stderr before detaching */
+    if (st->fuse_stderr) {
+        gchar *line = NULL;
+        gsize len = 0;
+        while (g_io_channel_read_line(st->fuse_stderr, &line, &len, NULL, NULL)
+               == G_IO_STATUS_NORMAL && line) {
+            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+            log_append(st, "%s", line);
+            g_free(line);
+        }
+    }
+    detach_stderr_watch(st);
+    describe_exit(st, status);
+
     if (st->mounted) {
         st->mounted = FALSE;
         if (st->mount_path) bookmarks_modify(st->mount_path, FALSE);
         gtk_button_set_label(GTK_BUTTON(st->toggle_btn), "Mount");
-        status_set(st, "FUSE process exited unexpectedly (status=%d)", status);
-        log_append(st, "[gui] FUSE process exited (status=%d)", status);
+        status_set(st, "FUSE exited unexpectedly");
     }
 }
 
+static gboolean on_fuse_stderr(GIOChannel *src, GIOCondition cond,
+                               gpointer user_data) {
+    AppState *st = user_data;
+    if (cond & G_IO_IN) {
+        gchar *line = NULL;
+        gsize len = 0;
+        GError *err = NULL;
+        GIOStatus s = g_io_channel_read_line(src, &line, &len, NULL, &err);
+        if (s == G_IO_STATUS_NORMAL && line) {
+            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+            log_append(st, "%s", line);
+            g_free(line);
+        }
+        if (err) g_error_free(err);
+    }
+    if (cond & (G_IO_HUP | G_IO_ERR)) {
+        st->fuse_stderr_watch = 0;  /* GLib will remove this source */
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
 static gboolean start_fuse(AppState *st, GError **err) {
+    if (!g_find_program_in_path("fusermount3")) {
+        g_set_error(err, G_FILE_ERROR, G_FILE_ERROR_NOENT,
+                    "'fusermount3' not found on PATH (install the 'fuse3' package)");
+        return FALSE;
+    }
+
     gchar *app = find_app_binary();
     if (!app) {
         g_set_error(err, G_FILE_ERROR, G_FILE_ERROR_NOENT,
@@ -193,15 +265,26 @@ static gboolean start_fuse(AppState *st, GError **err) {
     envp = g_environ_setenv(envp, "DEDUP_DATA", st->storage_path, TRUE);
 
     GPid pid = 0;
-    gboolean ok = g_spawn_async(NULL, argv, envp,
-                                G_SPAWN_DO_NOT_REAP_CHILD,
-                                NULL, NULL, &pid, err);
+    gint stderr_fd = -1;
+    gboolean ok = g_spawn_async_with_pipes(
+        NULL, argv, envp,
+        G_SPAWN_DO_NOT_REAP_CHILD,
+        NULL, NULL, &pid,
+        NULL, NULL, &stderr_fd,
+        err);
     g_strfreev(envp);
     g_free(app);
     if (!ok) return FALSE;
 
     st->fuse_pid = pid;
     g_child_watch_add(pid, on_child_exit, st);
+
+    st->fuse_stderr = g_io_channel_unix_new(stderr_fd);
+    g_io_channel_set_close_on_unref(st->fuse_stderr, TRUE);
+    g_io_channel_set_flags(st->fuse_stderr, G_IO_FLAG_NONBLOCK, NULL);
+    st->fuse_stderr_watch = g_io_add_watch(
+        st->fuse_stderr, G_IO_IN | G_IO_HUP | G_IO_ERR,
+        on_fuse_stderr, st);
     return TRUE;
 }
 

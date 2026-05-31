@@ -1,10 +1,10 @@
 # deduplication-fs
 
 A small content-addressed FUSE3 filesystem written in C. When a file is
-written through the mount, it is split into **64-byte chunks** (`CHUNK_SIZE`
-in `src/store.h`), each chunk is hashed with **SHA-512**, and stored on the
-backing volume keyed by its hash. The mount itself exposes the reassembled
-files; identical chunks are stored only once.
+written through the mount, it is split into fixed-size chunks (see
+`CHUNK_SIZE` in `src/store.h`), each chunk is hashed with **SHA-512**, and
+stored on the backing volume keyed by its hash. The mount itself exposes
+the reassembled files; identical chunks are stored only once.
 
 Two front-ends are provided:
 
@@ -40,7 +40,7 @@ Example:
 
 ```
 [dedup] startup: data_root=/data
-[dedup] store: chunks_dir=/data/chunks chunk_size=64
+[dedup] store: chunks_dir=/data/chunks chunk_size=1000000
 [dedup] db: /data/files.sqlite
 [dedup] create: /a.txt mode=0644 file_id=12
 [dedup] commit: file_id=12 size=6 chunks=1 new=1 dedup=0
@@ -49,6 +49,9 @@ Example:
 [dedup] mkdir: /sub mode=0755
 [dedup] unlink: /a.txt (size=6)
 ```
+
+When using the GUI, the FUSE process's stderr (every `[dedup]` line) is
+captured live into the in-window log panel.
 
 `new=N dedup=M` on each `commit` line shows how many chunks were newly
 written versus reused.
@@ -154,6 +157,32 @@ Last-used paths are remembered in `~/.config/dedup-fs/config`.
 
 The GUI looks for the `app` binary next to itself (the `./dist/app`
 produced by `make dist`), and falls back to `dedup-fs` on `$PATH`.
+
+### Troubleshooting
+
+**FUSE process exits immediately with code 127.** A shared library is
+missing or has a different soname on your host. Run:
+
+```bash
+ldd dist/app | grep 'not found'
+```
+
+`libfuse3.so.3` (Debian 12) vs `libfuse3.so.4` (Debian 13) is the most
+common case. The build defaults to Debian Trixie (`libfuse3.so.4`). If
+your host is on Debian 12 / Ubuntu 22.04 instead, rebuild with:
+
+```bash
+DOCKER_BUILDKIT=1 docker build \
+    --target export \
+    --build-arg HOST_BASE=debian:bookworm \
+    --output type=local,dest=./dist .
+```
+
+**"fusermount3 not found".** Install the `fuse3` package
+(`sudo apt install fuse3`).
+
+**"Permission denied" on mount.** Add yourself to the `fuse` group
+(`sudo usermod -aG fuse $USER`) and log out / back in.
 
 ---
 
