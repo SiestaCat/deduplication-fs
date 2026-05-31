@@ -27,6 +27,10 @@ int store_init(const char *root) {
     return 0;
 }
 
+const char *store_chunks_root(void) {
+    return chunks_root;
+}
+
 static int ensure_dir(const char *path) {
     if (mkdir(path, 0700) < 0 && errno != EEXIST) return -errno;
     return 0;

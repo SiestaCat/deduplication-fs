@@ -59,6 +59,18 @@ void db_close(void) {
     }
 }
 
+int db_exec(const char *sql) {
+    char *err = NULL;
+    int rc = sqlite3_exec(db, sql, NULL, NULL, &err);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "[dedup] sqlite exec '%s': %s\n", sql,
+                err ? err : "?");
+        sqlite3_free(err);
+        return -EIO;
+    }
+    return 0;
+}
+
 int db_get(const char *path, db_entry_t *out) {
     sqlite3_stmt *st;
     int rc = sqlite3_prepare_v2(db,

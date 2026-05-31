@@ -10,6 +10,9 @@
 
 int store_init(const char *root);
 
+/* Path to the chunks directory (statvfs target for op_statfs). */
+const char *store_chunks_root(void);
+
 /* Returns 1 if a new chunk file was written, 0 if it was already present
  * (deduplicated), or a negative errno on failure. */
 int store_put(const void *data, size_t len, char *hash_out);

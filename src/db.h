@@ -16,6 +16,10 @@ typedef struct {
 int db_open(const char *path);
 void db_close(void);
 
+/* Run an arbitrary SQL statement (e.g. "BEGIN IMMEDIATE", "COMMIT",
+ * "ROLLBACK"). Returns 0 on success, -EIO on error (and logs it). */
+int db_exec(const char *sql);
+
 int db_get(const char *path, db_entry_t *out);
 
 int db_create_file(const char *path, int mode, int64_t now_ns, int64_t *id_out);

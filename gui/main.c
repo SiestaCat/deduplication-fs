@@ -260,7 +260,7 @@ static gboolean start_fuse(AppState *st, GError **err) {
     g_mkdir_with_parents(st->mount_path, 0755);
     g_mkdir_with_parents(st->storage_path, 0700);
 
-    gchar *argv[] = { app, "-f", st->mount_path, NULL };
+    gchar *argv[] = { app, "-f", "-s", st->mount_path, NULL };
     gchar **envp = g_get_environ();
     envp = g_environ_setenv(envp, "DEDUP_DATA", st->storage_path, TRUE);
 

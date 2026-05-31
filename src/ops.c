@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 typedef struct {
@@ -101,8 +102,12 @@ static int read_from_chunks(int64_t file_id, off_t offset, char *out, size_t len
 }
 
 static int commit_chunks(int64_t file_id, const char *buf, size_t size) {
-    int rc = db_chunks_clear(file_id);
+    int rc = db_exec("BEGIN IMMEDIATE");
     if (rc < 0) return rc;
+
+    rc = db_chunks_clear(file_id);
+    if (rc < 0) goto fail;
+
     size_t off = 0;
     int64_t idx = 0;
     int new_chunks = 0;
@@ -112,16 +117,29 @@ static int commit_chunks(int64_t file_id, const char *buf, size_t size) {
         if (n > CHUNK_SIZE) n = CHUNK_SIZE;
         char hash[SHA512_HEX_LEN + 1];
         rc = store_put(buf + off, n, hash);
-        if (rc < 0) return rc;
+        if (rc < 0) goto fail;
         if (rc == 1) new_chunks++; else dedup_hits++;
         rc = db_chunk_add(file_id, idx, hash, (int)n);
-        if (rc < 0) return rc;
+        if (rc < 0) goto fail;
         off += n;
         idx++;
     }
+
+    rc = db_update_file(file_id, (int64_t)size, now_ns());
+    if (rc < 0) goto fail;
+
+    rc = db_exec("COMMIT");
+    if (rc < 0) goto fail;
+
     LOG("commit: file_id=%lld size=%zu chunks=%lld new=%d dedup=%d",
         (long long)file_id, size, (long long)idx, new_chunks, dedup_hits);
-    return db_update_file(file_id, (int64_t)size, now_ns());
+    return 0;
+
+fail:
+    db_exec("ROLLBACK");
+    LOG("commit FAILED: file_id=%lld size=%zu rc=%d",
+        (long long)file_id, size, rc);
+    return rc;
 }
 
 /* ---- FUSE callbacks ---- */
@@ -389,7 +407,36 @@ static int op_fsync(const char *path, int datasync,
     return 0;
 }
 
+static int op_statfs(const char *path, struct statvfs *st) {
+    (void)path;
+    /* Report whatever the backing filesystem reports for the chunks dir.
+     * Without this, statvfs() reports 0 free → tools like unzip / cp
+     * refuse to write ("no space left on device"). */
+    if (statvfs(store_chunks_root(), st) < 0) return -errno;
+    return 0;
+}
+
+static void *op_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+    /* Disable kernel caching of attributes/lookups so a writer's commit
+     * is visible to a subsequent reader (e.g. composer → unzip on the
+     * same path). Default attr_timeout=1.0s would serve stale size=0
+     * for up to a second after release. */
+    cfg->kernel_cache    = 0;
+    cfg->entry_timeout   = 0.0;
+    cfg->attr_timeout    = 0.0;
+    cfg->negative_timeout = 0.0;
+
+    /* Bigger writes per FUSE round-trip for large files.
+     * (conn->max_read is read-only here — FUSE3 negotiates it with the kernel.) */
+    conn->max_write = 1024 * 1024;
+
+    LOG("init: max_write=%u attr_timeout=0", conn->max_write);
+    return NULL;
+}
+
 const struct fuse_operations dedup_ops = {
+    .init     = op_init,
+    .statfs   = op_statfs,
     .getattr  = op_getattr,
     .readdir  = op_readdir,
     .mkdir    = op_mkdir,

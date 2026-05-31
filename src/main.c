@@ -42,7 +42,29 @@ int main(int argc, char *argv[]) {
     }
     LOG("db: %s", dbpath);
 
-    int rc = fuse_main(argc, argv, &dedup_ops, NULL);
+    /* Force single-threaded FUSE. Our per-handle buffer and SQLite usage
+     * aren't safe under FUSE's default multi-threaded dispatch — concurrent
+     * writes on the same fd corrupt the handle's buffer and concurrent
+     * commits race on the DB. Inject "-s" unless the user already passed it. */
+    int has_s = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-s") == 0) { has_s = 1; break; }
+    }
+    char **new_argv = NULL;
+    int new_argc = argc;
+    if (!has_s) {
+        new_argv = malloc((size_t)(argc + 2) * sizeof(char *));
+        if (!new_argv) { LOG("error: malloc"); return 1; }
+        new_argv[0] = argv[0];
+        new_argv[1] = (char *)"-s";
+        for (int i = 1; i < argc; i++) new_argv[i + 1] = argv[i];
+        new_argv[argc + 1] = NULL;
+        new_argc = argc + 1;
+        LOG("forcing single-threaded FUSE (-s)");
+    }
+
+    int rc = fuse_main(new_argc, new_argv ? new_argv : argv, &dedup_ops, NULL);
+    free(new_argv);
     db_close();
     LOG("shutdown: rc=%d", rc);
     return rc;
