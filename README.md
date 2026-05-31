@@ -1,6 +1,6 @@
-# Proyecto CLI en C Dockerizado
+# Dockerized C CLI Project
 
-## Estructura
+## Structure
 
 ```text
 .
@@ -11,40 +11,41 @@
     └── main.c
 ```
 
-## Ejecutar con Docker
+## Run with Docker
 
 ```bash
 docker build -t deduplication-fs-c-cli .
 docker run --rm -it deduplication-fs-c-cli
 ```
 
-Para detenerlo:
-
-```bash
-Ctrl+C
-```
-Para detenerlo:
+To stop it:
 
 ```bash
 Ctrl+C
 ```
 
-## Ejecutar localmente sin Docker
+To stop it:
 
-Necesitas `gcc` y `make` instalados.
+```bash
+Ctrl+C
+```
+
+## Run locally without Docker
+
+You need to have `gcc` and `make` installed.
 
 ```bash
 make
 ./app
 ```
 
-O directamente:
+Or directly:
 
 ```bash
 make run
 ```
 
-Limpiar binarios:
+Clean binaries:
 
 ```bash
 make clean
