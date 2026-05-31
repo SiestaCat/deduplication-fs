@@ -1,0 +1,5 @@
+app
+*.o
+.git
+.gitignore
+README.md
