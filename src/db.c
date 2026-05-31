@@ -183,11 +183,16 @@ int db_delete(const char *path) {
 int db_rename(const char *from, const char *to) {
     char parent[PATH_MAX], name[PATH_MAX];
     split_path(to, parent, name);
+
+    int rc = db_exec("BEGIN IMMEDIATE");
+    if (rc < 0) return rc;
+
+    /* 1) Move the entry itself. */
     sqlite3_stmt *st;
-    int rc = sqlite3_prepare_v2(db,
+    rc = sqlite3_prepare_v2(db,
         "UPDATE entries SET path = ?, parent = ?, name = ? WHERE path = ?",
         -1, &st, NULL);
-    if (rc != SQLITE_OK) return -EIO;
+    if (rc != SQLITE_OK) { db_exec("ROLLBACK"); return -EIO; }
     sqlite3_bind_text(st, 1, to,     -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 2, parent, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 3, name,   -1, SQLITE_TRANSIENT);
@@ -195,10 +200,35 @@ int db_rename(const char *from, const char *to) {
     rc = sqlite3_step(st);
     int changes = sqlite3_changes(db);
     sqlite3_finalize(st);
-    if (rc == SQLITE_CONSTRAINT) return -EEXIST;
-    if (rc != SQLITE_DONE) return -EIO;
-    if (changes == 0) return -ENOENT;
-    return 0;
+    if (rc == SQLITE_CONSTRAINT) { db_exec("ROLLBACK"); return -EEXIST; }
+    if (rc != SQLITE_DONE)       { db_exec("ROLLBACK"); return -EIO; }
+    if (changes == 0)            { db_exec("ROLLBACK"); return -ENOENT; }
+
+    /* 2) Rebase every descendant: rewrite path and parent so they point
+     *    under the new prefix. No-op when `from` was a file. SQLite's
+     *    substr() is 1-indexed and starts at (length(from)+1) so we skip
+     *    the old prefix; concatenating `to` puts the descendants under
+     *    the new location. */
+    int from_len = (int)strlen(from);
+    char like_pattern[PATH_MAX];
+    snprintf(like_pattern, sizeof(like_pattern), "%s/%%", from);
+
+    rc = sqlite3_prepare_v2(db,
+        "UPDATE entries SET "
+        "  path   = ?1 || substr(path,   ?2), "
+        "  parent = ?1 || substr(parent, ?2) "
+        "WHERE path LIKE ?3 ESCAPE '\\'",
+        -1, &st, NULL);
+    if (rc != SQLITE_OK) { db_exec("ROLLBACK"); return -EIO; }
+    sqlite3_bind_text(st, 1, to, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st,  2, from_len + 1);
+    sqlite3_bind_text(st, 3, like_pattern, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) { db_exec("ROLLBACK"); return -EIO; }
+
+    rc = db_exec("COMMIT");
+    return rc < 0 ? rc : 0;
 }
 
 int db_count_children(const char *dir_path, int *out_count) {
