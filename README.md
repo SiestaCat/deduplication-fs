@@ -1,5 +1,7 @@
 # deduplication-fs
 
+WARNING: THIS PROJECT WAS MADE 100% WITH VIPE-CODING. BE careful.
+
 A small content-addressed FUSE3 filesystem written in C. When a file is
 written through the mount, it is split into fixed-size chunks (see
 `CHUNK_SIZE` in `src/store.h`), each chunk is hashed with **SHA-512**, and
